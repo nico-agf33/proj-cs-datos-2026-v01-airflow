@@ -104,10 +104,14 @@ def pipeline_vehiculos():
     def cosecha_bronce_deruedas(marca):
         
         ### el collector search() se detiene cuando no hay mas paginas
-        datos_scraping = deruedas.search(marca=marca)
-        if not datos_scraping: return None
+        ruta_deruedas = DIR_BRONCE / "deruedas"
+        ruta_deruedas.mkdir(parents=True, exist_ok=True)
         
-        ruta_archivo = subcarpeta / f"crudo_{_slug(marca)}.json"
+        datos_scraping = deruedas.search(marca=marca)
+        if not datos_scraping: 
+            return None
+        
+        ruta_archivo = ruta_deruedas / f"crudo_{_slug(marca)}.json"
         with open(ruta_archivo, "w", encoding="utf-8") as f:
             json.dump(datos_scraping, f, ensure_ascii=False, indent=4)
         return str(ruta_archivo)
