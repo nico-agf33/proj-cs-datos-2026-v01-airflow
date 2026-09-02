@@ -33,7 +33,7 @@ VAR_ULTIMA_COSECHA = "autos_fecha_ultima_ingesta"
     schedule="@daily",
     start_date=pendulum.datetime(2026, 8, 1, tz="America/Argentina/Buenos_Aires"),
     catchup=False,
-    max_active_tasks=1, 
+    max_active_tasks=2, 
     tags=["proyecto-integrador", "vehiculos"],
     params={
         "forzar_descarga": Param(False, type="boolean", title="Forzar recolección ahora"),
