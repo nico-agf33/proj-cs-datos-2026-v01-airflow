@@ -40,7 +40,14 @@ VAR_ULTIMA_COSECHA = "autos_fecha_ultima_ingesta"
     },
 )
 def pipeline_vehiculos():
-
+    @task
+    def crear_carpetas_trabajo():
+        ### crear la estructura de carpetas 
+        for carpeta in [DIR_BRONCE, DIR_PLATA, DIR_BRONCE / "deruedas"]:
+            carpeta.mkdir(parents=True, exist_ok=True)
+        log.info("directorios creados")
+        return True
+        
     #### sensor -> verificar que los portales respondan
     @task.sensor(poke_interval=60, timeout=1800, mode="reschedule", soft_fail=True)
     def validar_disponibilidad_fuentes():
@@ -85,7 +92,7 @@ def pipeline_vehiculos():
     ### capa bronce -> ingesta
     @task
     def cosecha_bronce_carone():
-        DIR_BRONCE.mkdir(parents=True, exist_ok=True)
+        
         ### el collector search() se detiene cuando la API no devuelve mas nada
         datos_api = carone.search() 
         ruta_archivo = DIR_BRONCE / "carone_raw.json"
@@ -95,8 +102,7 @@ def pipeline_vehiculos():
 
     @task(map_index_template="{{ task.op_kwargs['marca'] }}")
     def cosecha_bronce_deruedas(marca):
-        subcarpeta = DIR_BRONCE / "deruedas"
-        subcarpeta.mkdir(parents=True, exist_ok=True)
+        
         ### el collector search() se detiene cuando no hay mas paginas
         datos_scraping = deruedas.search(marca=marca)
         if not datos_scraping: return None
@@ -172,6 +178,7 @@ def pipeline_vehiculos():
         return str(path_zip)
 
     ### flujo del grafo
+    setup = crear_carpetas_trabajo()
     fuentes_vivas = validar_disponibilidad_fuentes()
     lista_marcas = obtener_marcas_actuales()
     camino = elegir_ruta_datos(lista_marcas)
