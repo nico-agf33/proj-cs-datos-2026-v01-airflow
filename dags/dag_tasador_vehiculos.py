@@ -76,7 +76,7 @@ def pipeline_vehiculos():
     def chequear_refresh_mensual(**context) -> bool:
         if context["params"]["forzar_descarga"]:
             return True
-        ultima_fecha = Variable.get(VAR_ULTIMA_COSECHA, default_var=None)
+        ultima_fecha = Variable.get(VAR_ULTIMA_COSECHA, default=None)
         if not ultima_fecha:
             return True
         dias_transcurridos = (pendulum.now() - pendulum.parse(ultima_fecha)).days
@@ -126,7 +126,7 @@ def pipeline_vehiculos():
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        df['grupo'] = Variable.get("grupo", default_var="5K09-03")
+        df['grupo'] = Variable.get("grupo", default="5K09-03")
         df = df.drop_duplicates(subset=["id_publicacion"]).reset_index(drop=True)
         
         ds = context["ds"]
@@ -148,7 +148,7 @@ def pipeline_vehiculos():
     @task(trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS)
     def validar_calidad_dataset(ruta_csv):
         df = pd.read_csv(ruta_csv)
-        meta_v = int(Variable.get("meta_volumen", default_var=9000))
+        meta_v = int(Variable.get("meta_volumen", default=9000))
         if len(df) < meta_v:
             raise ValueError(f"volumen insuficiente: {len(df)}/{meta_v}")
         return ruta_csv
