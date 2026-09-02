@@ -1,0 +1,55 @@
+# Caches and outputs
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data directories (Se ignoran los datos descargados para no inflar el repo)
+data/raw/**
+data/interim/**
+data/processed/**
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+
+# Logs y Reportes
+*.log
+logs/
+per_source_errors.json
+
+# Sample data only (Solo para ejemplos pequeños que sí se quieran trackear)
+data/samples/**
+!data/samples/.gitkeep
+
+# Heavy formats
+*.parquet
+*.csv.gz
+*.jsonl
+
+# Secrets and env
+.env
+.env.*
+secrets/
+
+# Internal/lsp/build artefacts
+.mi-lsp/
+.next/
+node_modules/
+
+# Subagent orchestration
+.pi-subagents/
+
+# Audit evidence
+.docs/

@@ -1,0 +1,16 @@
+airflow:
+  connections:
+    - conn_id: carone_api
+      conn_type: http
+      conn_host: carone.com.ar
+      conn_schema: https
+    - conn_id: deruedas_web
+      conn_type: http
+      conn_host: www.deruedas.com.ar
+      conn_schema: https
+
+  variables:
+    - variable_name: "grupo"
+      variable_value: "5K09-03"
+    - variable_name: "meta_volumen"
+      variable_value: "9000"
