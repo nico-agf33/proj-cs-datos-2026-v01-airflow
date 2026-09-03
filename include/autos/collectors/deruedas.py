@@ -31,7 +31,7 @@ def get_available_brands() -> list[str]:
         logger.error(f"[deruedas] Error descubriendo marcas: {e}")
         return []
 
-def search(marca: str = None, modelo: str = None,delay: float = 0.5) -> list[dict]:
+def search(marca: str = None, modelo: str = None,delay: float = 1.0) -> list[dict]:
 
     ### buscar vehiculos y recorrer todas las paginas disponibles,
     ### detener automaticamente cuando no encuentra mas avisos
