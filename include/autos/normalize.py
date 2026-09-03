@@ -17,7 +17,7 @@ def remove_accents(text: str) -> str:
 def as_number(val) -> float:
 
     	### extraer el 1er nro de un string y devolverlo como float
-    	### manejando formatos locales (punto para unidades de mil, coma para decimales)
+    	### manejando separadores de miles y decimales
     
     	### ej:
     	### '1.6 lts' -> 1.6
@@ -29,20 +29,28 @@ def as_number(val) -> float:
         return None
     if isinstance(val, (int, float)):
         return float(val)
-    
-    	### eliminar puntos de unidad de mil 
-    s = str(val).replace('.', '').strip()
-    	### cambiar coma decimal por punto
-    s = s.replace(',', '.')
-    
-    	### buscar el 1er grupo numerico (entero o con decimales)
-    match = re.search(r'(\d+(\.\d+)?)', s)
-    if match:
-        try:
-            return float(match.group(1))
-        except ValueError:
-            return None
-    return None
+
+    match = re.search(r"\d[\d.,]*", str(val))
+    if not match:
+        return None
+
+    token = match.group(0).rstrip(".,")
+    if "." in token and "," in token:
+        decimal = "." if token.rfind(".") > token.rfind(",") else ","
+        thousands = "," if decimal == "." else "."
+        token = token.replace(thousands, "").replace(decimal, ".")
+    elif "." in token or "," in token:
+        separator = "." if "." in token else ","
+        parts = token.split(separator)
+        if len(parts) > 2 or len(parts[-1]) == 3:
+            token = "".join(parts)
+        else:
+            token = ".".join(parts)
+
+    try:
+        return float(token)
+    except ValueError:
+        return None
 
 def clean_price_and_currency(text: str) -> tuple[float, str]:
 
