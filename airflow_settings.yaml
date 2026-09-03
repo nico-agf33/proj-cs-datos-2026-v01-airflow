@@ -18,5 +18,7 @@ airflow:
       variable_value: "2.0"
     - variable_name: "deruedas_max_pages"
       variable_value: "200"
+    - variable_name: "deruedas_target_records"
+      variable_value: "1001"
     - variable_name: "carone_max_pages"
       variable_value: "100"

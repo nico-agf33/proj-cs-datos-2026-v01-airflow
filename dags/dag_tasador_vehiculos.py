@@ -95,9 +95,13 @@ def pipeline_vehiculos():
         return brands
 
     @task(retries=2, retry_delay=timedelta(minutes=10))
-    def cosecha_bronce_carone() -> str:
+    def cosecha_bronce_carone(**context) -> str:
+        raw_dir = DIR_BRONCE / "carone" / "raw"
+        if context["ti"].try_number == 1:
+            shutil.rmtree(raw_dir, ignore_errors=True)
+            raw_dir.mkdir(parents=True, exist_ok=True)
         records = carone.search(
-            raw_dir=DIR_BRONCE / "carone" / "raw",
+            raw_dir=raw_dir,
             max_pages=int(Variable.get("carone_max_pages", default=100)),
         )
         if not records:
@@ -114,30 +118,72 @@ def pipeline_vehiculos():
         retry_delay=timedelta(minutes=15),
         max_active_tis_per_dag=1,
     )
-    def cosecha_bronce_deruedas(brands: list[str]) -> list[str]:
-        """Procesar todas las marcas en serie con un único limitador HTTP."""
+    def cosecha_bronce_deruedas(
+        brands: list[str],
+        **context,
+    ) -> list[str]:
+        """Procesar marcas en serie, con límite global y checkpoints."""
         delay = float(Variable.get("deruedas_delay_seconds", default=2.0))
         max_pages = int(Variable.get("deruedas_max_pages", default=200))
+        target_records = int(
+            Variable.get("deruedas_target_records", default=1001)
+        )
         client = deruedas.build_client(delay)
+        raw_root = DIR_BRONCE / "deruedas" / "raw"
+        normalized_dir = DIR_BRONCE / "deruedas" / "normalized"
         outputs: list[str] = []
+        collected = 0
+
+        if context["ti"].try_number == 1:
+            for child in raw_root.iterdir():
+                if child.is_dir():
+                    shutil.rmtree(child)
+            for checkpoint in normalized_dir.glob("*.json*"):
+                checkpoint.unlink()
+        else:
+            for checkpoint in sorted(normalized_dir.glob("*.json")):
+                records = json.loads(checkpoint.read_text(encoding="utf-8"))
+                if isinstance(records, list) and records:
+                    outputs.append(str(checkpoint))
+                    collected += len(records)
+            log.info(
+                "deRuedas: reanudando %d checkpoints con %d registros",
+                len(outputs),
+                collected,
+            )
 
         for brand in brands:
             slug = _slug(brand)
+            output = normalized_dir / f"{slug}.json"
+            if str(output) in outputs:
+                continue
+            remaining = target_records - collected
+            if remaining <= 0:
+                break
             records = deruedas.search(
                 marca=brand,
                 client=client,
+                limit=remaining,
                 max_pages=max_pages,
-                raw_dir=DIR_BRONCE / "deruedas" / "raw" / slug,
+                raw_dir=raw_root / slug,
             )
             if not records:
                 log.warning("deRuedas no devolvió publicaciones para %s", brand)
                 continue
-            output = DIR_BRONCE / "deruedas" / "normalized" / f"{slug}.json"
-            output.write_text(
+            temporary = output.with_suffix(".json.tmp")
+            temporary.write_text(
                 json.dumps(records, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            temporary.replace(output)
             outputs.append(str(output))
+            collected += len(records)
+            log.info(
+                "deRuedas: checkpoint %s guardado (%d/%d registros)",
+                brand,
+                collected,
+                target_records,
+            )
 
         if not outputs:
             raise ValueError("deRuedas no produjo archivos normalizados")

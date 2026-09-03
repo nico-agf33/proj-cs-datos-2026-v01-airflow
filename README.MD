@@ -76,6 +76,7 @@ astro dev stop
 | `meta_volumen` | `1001` | Mínimo de filas exigido |
 | `deruedas_delay_seconds` | `2.0` | Intervalo entre requests de deRuedas |
 | `deruedas_max_pages` | `200` | Tope de páginas por marca |
+| `deruedas_target_records` | `1001` | Tope global de registros deRuedas por cosecha |
 | `carone_max_pages` | `100` | Tope de páginas GraphQL |
 
 ## Controles de calidad
@@ -106,3 +107,47 @@ python -m pytest
 ```
 
 Las pruebas usan respuestas simuladas; no consultan deRuedas ni CarOne.
+
+## Evidencia de entrega — 2026-09-03
+
+Corrida completa exitosa:
+
+- DAG run: `manual__2026-09-03T16:04:10.521198+00:00`.
+- Configuración: `{"forzar_descarga": true}`.
+- Duración: 2.401,14 segundos (40 min 01,14 s).
+- Dataset: 1.192 filas únicas y 20 columnas.
+- Fuentes: 1.001 filas de deRuedas y 191 de CarOne.
+- Calidad: los siete controles pasaron; hay columnas numéricas y de texto,
+  ninguna columna está completamente vacía y `precio` está disponible en
+  1.189 filas.
+- Nulos medidos: `consumo_lt_100km` 4,03 %, `motor_lt` 2,68 %,
+  `potencia_hp`, `combustible`, `traccion` y `transmision` 1,43 %,
+  `version` 0,42 % y `precio` 0,25 %.
+- HTTP 429: no se observó ninguno en esta corrida. Se mantuvo el intervalo de
+  2 segundos y la lógica de `Retry-After`.
+
+Artefactos observados:
+
+- Bronze: `include/output/bronze/` (129 MiB).
+- Silver: `include/output/silver/final_2026-09-03.csv` (316 KiB).
+- Calidad: `include/output/reporte_calidad.json`.
+- Frozen: `include/frozen/autos_semilla.csv` (316 KiB).
+- Entregable: `include/output/tp1_5K09_03.zip` (68 KiB).
+
+La corrida no forzada `manual__2026-09-03T16:57:12.136079+00:00` terminó
+correctamente en 8,29 segundos: seleccionó el frozen y dejó salteadas las tres
+tareas que consultan CarOne/deRuedas.
+
+### Pasos exactos para la presentación
+
+1. Ejecutar `astro dev start` y abrir la URL de Airflow que imprime la CLI.
+2. Abrir `tp1_5K09_03_autos_mensual` y mostrar en Runs la corrida completa
+   verde indicada arriba.
+3. Mostrar el grafo y explicar la bifurcación entre cosecha y frozen.
+4. Abrir `include/output/silver/final_2026-09-03.csv` y señalar
+   `clave_publicacion`, `fuente`, los tipos mixtos y el objetivo `precio`.
+5. Abrir `include/output/reporte_calidad.json` y mostrar filas, nulos y los
+   siete checks en `true`.
+6. Mostrar las carpetas bronze, silver, frozen y el ZIP.
+7. No lanzar una cosecha forzada durante la exposición; si se demuestra la
+   operación, usar una corrida normal para seleccionar el frozen.
