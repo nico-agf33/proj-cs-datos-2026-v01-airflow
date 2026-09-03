@@ -72,7 +72,7 @@ def search(marca: str = None, modelo: str = None) -> list[dict]:
             logger.info(f"[deruedas] Procesando página {page} ({len(unique_links)} avisos)...")
 
             for url_ficha in unique_links:
-                time.sleep(0.33) ### rate limit
+                time.sleep(0.5) ### rate limit
                 item = _scrape_detail(url_ficha)
                 if item:
                     results.append(item)
