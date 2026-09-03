@@ -24,6 +24,12 @@ data/processed/**
 !data/interim/.gitkeep
 !data/processed/.gitkeep
 
+# Salidas generadas por el DAG de Astro/Airflow
+include/output/**
+!include/output/.gitkeep
+include/frozen/*.csv
+!include/frozen/.gitkeep
+
 # Logs y Reportes
 *.log
 logs/

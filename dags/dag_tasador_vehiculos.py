@@ -1,207 +1,241 @@
-"""
-Grupo: 5K09-03
-"""
-from __future__ import annotations
-import json
-import zipfile
-import os
-import logging
-from pathlib import Path
-import pendulum
-import pandas as pd
+"""Pipeline de Entrega 1 para avisos de autos usados.
 
-from airflow.sdk import Param, Variable, dag, task, PokeReturnValue as ResultadoValidacion
+Grupo: 5K09-03
+Una fila representa una publicación. La variable objetivo es ``precio``.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import shutil
+import zipfile
+from datetime import timedelta
+from pathlib import Path
+
+import pendulum
+from airflow.sdk import Param, Variable, dag, task
 from airflow.task.trigger_rule import TriggerRule
 
-### logica de negocio
-from autos import schema
 from autos.collectors import carone, deruedas
 from autos.normalize import _slug
+from autos.quality import consolidate_json_files, validate_dataset
 
 log = logging.getLogger(__name__)
 
-### config de directorios
 DIR_SALIDA = Path("/usr/local/airflow/include/output")
 DIR_BRONCE = DIR_SALIDA / "bronze"
 DIR_PLATA = DIR_SALIDA / "silver"
 DIR_FROZEN = Path("/usr/local/airflow/include/frozen")
-
 VAR_ULTIMA_COSECHA = "autos_fecha_ultima_ingesta"
+
 
 @dag(
     dag_id="tp1_5K09_03_autos_mensual",
     schedule="@daily",
-    start_date=pendulum.datetime(2026, 8, 1, tz="America/Argentina/Buenos_Aires"),
+    start_date=pendulum.datetime(
+        2026,
+        8,
+        1,
+        tz="America/Argentina/Buenos_Aires",
+    ),
     catchup=False,
-    max_active_tasks=2, 
+    max_active_runs=1,
+    max_active_tasks=2,
     tags=["proyecto-integrador", "vehiculos"],
     params={
-        "forzar_descarga": Param(False, type="boolean", title="Forzar recolección ahora"),
+        "forzar_descarga": Param(
+            False,
+            type="boolean",
+            title="Forzar recolección ahora",
+        ),
     },
 )
 def pipeline_vehiculos():
     @task
-    def crear_carpetas_trabajo():
-        ### crear la estructura de carpetas 
-        for carpeta in [DIR_BRONCE, DIR_PLATA, DIR_BRONCE / "deruedas"]:
-            carpeta.mkdir(parents=True, exist_ok=True)
-        log.info("directorios creados")
+    def crear_carpetas_trabajo() -> bool:
+        for directory in [
+            DIR_SALIDA,
+            DIR_BRONCE / "carone" / "raw",
+            DIR_BRONCE / "deruedas" / "raw",
+            DIR_BRONCE / "deruedas" / "normalized",
+            DIR_PLATA,
+            DIR_FROZEN,
+        ]:
+            directory.mkdir(parents=True, exist_ok=True)
         return True
-        
-    #### sensor -> verificar que los portales respondan
-    @task.sensor(poke_interval=60, timeout=1800, mode="reschedule", soft_fail=True)
-    def validar_disponibilidad_fuentes():
-        try:
-            ### si se obtienen marcas, el sitio esta online
-            m_carone = carone.get_available_brands()
-            m_deruedas = deruedas.get_available_brands()
-            if m_carone and m_deruedas:
-                log.info("Fuentes en linea.")
-                return ResultadoValidacion(is_done=True)
-            return ResultadoValidacion(is_done=False)
-        except Exception as e:
-            log.warning("Fallo de conectividad: %s", e)
-            return ResultadoValidacion(is_done=False)
 
-    ### listado de marcas
-    @task
-    def obtener_marcas_actuales():
-        marcas = deruedas.get_available_brands()
-        if not marcas:
-            raise ValueError("no se detectaron marcas para procesar.")
-        return marcas
+    @task.branch
+    def elegir_ruta_datos(**context) -> str | list[str]:
+        if context["params"]["forzar_descarga"]:
+            return ["descubrir_marcas_deruedas", "cosecha_bronce_carone"]
 
-    ### branching -> ¿descarga nueva o capa frozen?
-    @task.branch(trigger_rule=TriggerRule.ALL_DONE)
-    def elegir_ruta_datos(marcas_ok) -> str:
-        if marcas_ok:
-            return "chequear_refresh_mensual"
+        last_harvest = Variable.get(VAR_ULTIMA_COSECHA, default=None)
+        if not last_harvest:
+            return ["descubrir_marcas_deruedas", "cosecha_bronce_carone"]
+
+        elapsed_days = (pendulum.now("UTC") - pendulum.parse(last_harvest)).days
+        if elapsed_days >= 30:
+            return ["descubrir_marcas_deruedas", "cosecha_bronce_carone"]
         return "usar_respaldo_congelado"
 
-    ### short circuit -> ciclo de 30 dias
-    @task.short_circuit
-    def chequear_refresh_mensual(**context) -> bool:
-        if context["params"]["forzar_descarga"]:
-            return True
-        ultima_fecha = Variable.get(VAR_ULTIMA_COSECHA, default=None)
-        if not ultima_fecha:
-            return True
-        dias_transcurridos = (pendulum.now() - pendulum.parse(ultima_fecha)).days
-        return dias_transcurridos >= 30
+    @task(retries=2, retry_delay=timedelta(minutes=15))
+    def descubrir_marcas_deruedas() -> list[str]:
+        client = deruedas.build_client(
+            float(Variable.get("deruedas_delay_seconds", default=2.0))
+        )
+        brands = deruedas.get_available_brands(
+            client=client,
+            raw_dir=DIR_BRONCE / "deruedas" / "raw",
+        )
+        if not brands:
+            raise ValueError("deRuedas no publicó marcas para procesar")
+        log.info("deRuedas: %d marcas descubiertas una sola vez", len(brands))
+        return brands
 
-    ### capa bronce -> ingesta
+    @task(retries=2, retry_delay=timedelta(minutes=10))
+    def cosecha_bronce_carone() -> str:
+        records = carone.search(
+            raw_dir=DIR_BRONCE / "carone" / "raw",
+            max_pages=int(Variable.get("carone_max_pages", default=100)),
+        )
+        if not records:
+            raise ValueError("CarOne no devolvió publicaciones")
+        output = DIR_BRONCE / "carone" / "normalized.json"
+        output.write_text(
+            json.dumps(records, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return str(output)
+
+    @task(
+        retries=2,
+        retry_delay=timedelta(minutes=15),
+        max_active_tis_per_dag=1,
+    )
+    def cosecha_bronce_deruedas(brands: list[str]) -> list[str]:
+        """Procesar todas las marcas en serie con un único limitador HTTP."""
+        delay = float(Variable.get("deruedas_delay_seconds", default=2.0))
+        max_pages = int(Variable.get("deruedas_max_pages", default=200))
+        client = deruedas.build_client(delay)
+        outputs: list[str] = []
+
+        for brand in brands:
+            slug = _slug(brand)
+            records = deruedas.search(
+                marca=brand,
+                client=client,
+                max_pages=max_pages,
+                raw_dir=DIR_BRONCE / "deruedas" / "raw" / slug,
+            )
+            if not records:
+                log.warning("deRuedas no devolvió publicaciones para %s", brand)
+                continue
+            output = DIR_BRONCE / "deruedas" / "normalized" / f"{slug}.json"
+            output.write_text(
+                json.dumps(records, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            outputs.append(str(output))
+
+        if not outputs:
+            raise ValueError("deRuedas no produjo archivos normalizados")
+        return outputs
+
     @task
-    def cosecha_bronce_carone():
-        
-        ### el collector search() se detiene cuando la API no devuelve mas nada
-        datos_api = carone.search() 
-        ruta_archivo = DIR_BRONCE / "carone_raw.json"
-        with open(ruta_archivo, "w", encoding="utf-8") as f:
-            json.dump(datos_api, f, ensure_ascii=False, indent=4)
-        return str(ruta_archivo)
+    def consolidar_capa_plata(
+        carone_path: str,
+        deruedas_paths: list[str],
+        **context,
+    ) -> dict:
+        output = DIR_PLATA / f"final_{context['ds']}.csv"
+        path = consolidate_json_files(
+            [carone_path, *deruedas_paths],
+            output,
+            group=Variable.get("grupo", default="5K09-03"),
+        )
+        return {"path": path, "fresh": True}
 
-    @task(map_index_template="{{ task.op_kwargs['marca'] }}")
-    def cosecha_bronce_deruedas(marca):
-        
-        ### el collector search() se detiene cuando no hay mas paginas
-        ruta_deruedas = DIR_BRONCE / "deruedas"
-        ruta_deruedas.mkdir(parents=True, exist_ok=True)
-        
-        datos_scraping = deruedas.search(marca=marca,delay=0.5)
-        if not datos_scraping: 
-            return None
-        
-        ruta_archivo = ruta_deruedas / f"crudo_{_slug(marca)}.json"
-        with open(ruta_archivo, "w", encoding="utf-8") as f:
-            json.dump(datos_scraping, f, ensure_ascii=False, indent=4)
-        return str(ruta_archivo)
-
-    ### capa plata -> transformacion y dataset tidy
     @task
-    def consolidar_capa_plata(json_carone, lista_jsons_dr, **context):
-        DIR_PLATA.mkdir(parents=True, exist_ok=True)
-        registros_unificados = []
-        
-        with open(json_carone, 'r') as f:
-            registros_unificados.extend(json.load(f))
-            
-        for path in lista_jsons_dr:
-            if path and os.path.exists(path):
-                with open(path, 'r') as f:
-                    registros_unificados.extend(json.load(f))
-        
-        df = pd.DataFrame(registros_unificados)
-        
-        for col in schema.NUMERICAS:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        df['grupo'] = Variable.get("grupo", default="5K09-03")
-        df = df.drop_duplicates(subset=["id_publicacion"]).reset_index(drop=True)
-        
-        ds = context["ds"]
-        ruta_final = DIR_PLATA / f"final_{ds}.csv"
-        df.to_csv(ruta_final, index=False, encoding="utf-8")
-        
-        Variable.set(VAR_ULTIMA_COSECHA, ds)
-        return str(ruta_final)
+    def usar_respaldo_congelado() -> dict:
+        seed = DIR_FROZEN / "autos_semilla.csv"
+        if not seed.exists():
+            raise FileNotFoundError(
+                "sin respaldo en include/frozen/autos_semilla.csv"
+            )
+        return {"path": str(seed), "fresh": False}
 
-    ### capa frozen
-    @task
-    def usar_respaldo_congelado():
-        ruta_semilla = DIR_FROZEN / "autos_semilla.csv"
-        if ruta_semilla.exists():
-            return str(ruta_semilla)
-        raise FileNotFoundError("sin respaldo disponible en include/frozen/")
-
-    ### validacion y entrega
     @task(trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS)
-    def validar_calidad_dataset(ruta_csv):
-        df = pd.read_csv(ruta_csv)
-        meta_v = int(Variable.get("meta_volumen", default=9000))
-        if len(df) < meta_v:
-            raise ValueError(f"volumen insuficiente: {len(df)}/{meta_v}")
-        return ruta_csv
+    def resolver_dataset(
+        fresh_dataset: dict | None,
+        frozen_dataset: dict | None,
+    ) -> dict:
+        selected = fresh_dataset or frozen_dataset
+        if not selected:
+            raise ValueError("ninguna ruta produjo un dataset")
+        return selected
 
     @task
-    def generar_entregable_zip(csv_path: str, **context):
+    def validar_calidad_dataset(dataset: dict, **context) -> dict:
+        minimum_rows = int(Variable.get("meta_volumen", default=1001))
+        report = validate_dataset(
+            dataset["path"],
+            minimum_rows=minimum_rows,
+        )
+        report_path = DIR_SALIDA / "reporte_calidad.json"
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        if dataset["fresh"]:
+            shutil.copy2(dataset["path"], DIR_FROZEN / "autos_semilla.csv")
+            Variable.set(VAR_ULTIMA_COSECHA, context["ts"])
+        return {
+            **dataset,
+            "quality_report": str(report_path),
+        }
+
+    @task
+    def generar_entregable_zip(dataset: dict, **context) -> str:
         dag_run = context["dag_run"]
-        nombre_zip = f"tp1_5K09_03.zip"
-        path_zip = DIR_SALIDA / nombre_zip
-        
-        with zipfile.ZipFile(path_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            zipf.write(csv_path, arcname="dataset.csv")
-            zipf.write(__file__, arcname="codigo_dag.py")
-            ### logs
-            log_dir = f"/usr/local/airflow/logs/dag_id={dag_run.dag_id}/run_id={dag_run.run_id}"
+        zip_path = DIR_SALIDA / "tp1_5K09_03.zip"
+
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.write(dataset["path"], arcname="dataset.csv")
+            archive.write(
+                dataset["quality_report"],
+                arcname="reporte_calidad.json",
+            )
+            archive.write(__file__, arcname="codigo_dag.py")
+            log_dir = (
+                f"/usr/local/airflow/logs/dag_id={dag_run.dag_id}"
+                f"/run_id={dag_run.run_id}"
+            )
             if os.path.exists(log_dir):
-                for root, _, archivos in os.walk(log_dir):
-                    for a in archivos:
-                        ruta_abs = os.path.join(root, a)
-                        zipf.write(ruta_abs, arcname=os.path.join("logs", os.path.relpath(ruta_abs, log_dir)))
-        return str(path_zip)
+                for root, _, files in os.walk(log_dir):
+                    for file_name in files:
+                        absolute = os.path.join(root, file_name)
+                        relative = os.path.relpath(absolute, log_dir)
+                        archive.write(
+                            absolute,
+                            arcname=os.path.join("logs", relative),
+                        )
+        return str(zip_path)
 
-    ### flujo del grafo
     setup = crear_carpetas_trabajo()
-    fuentes_vivas = validar_disponibilidad_fuentes()
-    lista_marcas = obtener_marcas_actuales()
-    camino = elegir_ruta_datos(lista_marcas)
-    refresh = chequear_refresh_mensual()
-    
-    ### dependencias de ingesta
-    c_raw = cosecha_bronce_carone()
-    d_raw = cosecha_bronce_deruedas.expand(marca=lista_marcas)
-    
-    plata = consolidar_capa_plata(c_raw, d_raw)
-    congelado = usar_respaldo_congelado()
-    
-    ### flujo de cierre
-    validado = validar_calidad_dataset(plata)
-    generar_entregable_zip(validado)
+    route = elegir_ruta_datos()
+    brands = descubrir_marcas_deruedas()
+    carone_raw = cosecha_bronce_carone()
+    deruedas_raw = cosecha_bronce_deruedas(brands)
+    fresh = consolidar_capa_plata(carone_raw, deruedas_raw)
+    frozen = usar_respaldo_congelado()
+    selected = resolver_dataset(fresh, frozen)
+    validated = validar_calidad_dataset(selected)
+    generar_entregable_zip(validated)
 
-    ### orquestacion de dependencias
-    fuentes_vivas >> lista_marcas >> camino
-    camino >> [refresh, congelado]
-    refresh >> [c_raw, d_raw]
+    setup >> route
+    route >> [brands, carone_raw, frozen]
+
 
 pipeline_vehiculos()

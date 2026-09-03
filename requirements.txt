@@ -7,6 +7,6 @@ pandas>=2.0.0
 numpy>=1.24.0
 
 apache-airflow-providers-http
-playwright>=1.40.0
 
 pendulum>=3.0.0
+pytest>=8.0.0
