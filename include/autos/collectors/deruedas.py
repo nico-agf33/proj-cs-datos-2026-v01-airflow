@@ -31,7 +31,7 @@ def get_available_brands() -> list[str]:
         logger.error(f"[deruedas] Error descubriendo marcas: {e}")
         return []
 
-def search(marca: str = None, modelo: str = None) -> list[dict]:
+def search(marca: str = None, modelo: str = None,delay: float = 0.5) -> list[dict]:
 
     ### buscar vehiculos y recorrer todas las paginas disponibles,
     ### detener automaticamente cuando no encuentra mas avisos
@@ -72,7 +72,7 @@ def search(marca: str = None, modelo: str = None) -> list[dict]:
             logger.info(f"[deruedas] Procesando página {page} ({len(unique_links)} avisos)...")
 
             for url_ficha in unique_links:
-                time.sleep(0.5) ### rate limit
+                time.sleep(delay) ### rate limit
                 item = _scrape_detail(url_ficha)
                 if item:
                     results.append(item)
